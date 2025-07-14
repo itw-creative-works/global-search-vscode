@@ -2,7 +2,7 @@
   "name": "global-search",
   "displayName": "Global Search",
   "description": "Search across all open files in all VS Code windows",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "itw-creative-works",
   "icon": "images/icon.png",
   "scripts": {

@@ -5,6 +5,7 @@ interface SearchResult {
     uri: vscode.Uri;
     fileName: string;
     relativePath: string;
+    workspaceFolderName?: string;
     lineNumber?: number;
     lineText?: string;
     matchIndices?: [number, number][];
@@ -28,7 +29,7 @@ export class GlobalSearchProvider {
             this.searchType === 'names' ? 'file names' :
             this.searchType === 'contents' ? 'file contents' : 'file names and contents';
         const scopeText = this.searchScope === 'open' ? 'open editors' : 'all files';
-        quickPick.placeholder = `Search ${typeText} in ${scopeText} in every window`;
+        quickPick.placeholder = `Search ${typeText} in ${scopeText} across all workspace folders`;
     }
 
     async showSearchPanel() {
@@ -83,7 +84,7 @@ export class GlobalSearchProvider {
         });
 
 
-        quickPick.onDidTriggerButton((button) => {
+        quickPick.onDidTriggerButton(async (button) => {
             if (button === scopeButton) {
                 // Toggle scope: open ↔ all
                 this.searchScope = this.searchScope === 'open' ? 'all' : 'open';
@@ -102,8 +103,11 @@ export class GlobalSearchProvider {
             // Trigger search if there's a value
             const currentValue = quickPick.value;
             if (currentValue.trim() !== '') {
-                quickPick.value = '';
-                quickPick.value = currentValue;
+                quickPick.busy = true;
+                const results = await this.search(currentValue);
+                this.outputChannel.appendLine(`Found ${results.length} search results after button click`);
+                quickPick.items = this.convertToQuickPickItems(results);
+                quickPick.busy = false;
             }
         });
 
@@ -116,64 +120,143 @@ export class GlobalSearchProvider {
         const lowerQuery = query.toLowerCase();
 
         if (this.searchScope === 'all') {
-            const files = await vscode.workspace.findFiles('**/*', '**/node_modules/**');
-            this.outputChannel.appendLine(`Found ${files.length} files in workspace`);
+            // Search across all workspace folders
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (workspaceFolders && workspaceFolders.length > 0) {
+                for (const folder of workspaceFolders) {
+                    this.outputChannel.appendLine(`Searching in workspace folder: ${folder.name}`);
+                    const files = await vscode.workspace.findFiles(
+                        new vscode.RelativePattern(folder, '**/*'),
+                        new vscode.RelativePattern(folder, '**/node_modules/**')
+                    );
+                    this.outputChannel.appendLine(`Found ${files.length} files in ${folder.name}`);
 
-            for (const file of files) {
-                const fileName = path.basename(file.fsPath);
-                const relativePath = vscode.workspace.asRelativePath(file);
+                    for (const file of files) {
+                        const fileName = path.basename(file.fsPath);
+                        const relativePath = vscode.workspace.asRelativePath(file);
 
-                // Check file names if needed
-                if ((this.searchType === 'names' || this.searchType === 'both') && fileName.toLowerCase().includes(lowerQuery)) {
-                    results.push({
-                        uri: file,
-                        fileName,
-                        relativePath
-                    });
-                }
+                        // Check file names if needed
+                        if ((this.searchType === 'names' || this.searchType === 'both') && fileName.toLowerCase().includes(lowerQuery)) {
+                            results.push({
+                                uri: file,
+                                fileName,
+                                relativePath,
+                                workspaceFolderName: folder.name
+                            });
+                        }
 
-                // Check file contents if needed
-                if (this.searchType === 'contents' || this.searchType === 'both') {
-                    try {
-                        const document = await vscode.workspace.openTextDocument(file);
-                        const text = document.getText();
-                        const lines = text.split('\n');
+                        // Check file contents if needed
+                        if (this.searchType === 'contents' || this.searchType === 'both') {
+                            try {
+                                const document = await vscode.workspace.openTextDocument(file);
+                                const text = document.getText();
+                                const lines = text.split('\n');
 
-                        for (let i = 0; i < lines.length; i++) {
-                            const line = lines[i];
-                            const lowerLine = line.toLowerCase();
-                            const index = lowerLine.indexOf(lowerQuery);
+                                for (let i = 0; i < lines.length; i++) {
+                                    const line = lines[i];
+                                    const lowerLine = line.toLowerCase();
+                                    const index = lowerLine.indexOf(lowerQuery);
 
-                            if (index !== -1) {
-                                results.push({
-                                    uri: file,
-                                    fileName,
-                                    relativePath,
-                                    lineNumber: i,
-                                    lineText: line.trim(),
-                                    matchIndices: [[index, index + query.length]]
-                                });
+                                    if (index !== -1) {
+                                        results.push({
+                                            uri: file,
+                                            fileName,
+                                            relativePath,
+                                            workspaceFolderName: folder.name,
+                                            lineNumber: i,
+                                            lineText: line.trim(),
+                                            matchIndices: [[index, index + query.length]]
+                                        });
+                                    }
+                                }
+                            } catch (error) {
+                                this.outputChannel.appendLine(`Error reading file ${relativePath}: ${error}`);
                             }
                         }
-                    } catch (error) {
-                        this.outputChannel.appendLine(`Error reading file ${relativePath}: ${error}`);
+                    }
+                }
+            } else {
+                // Fallback to old behavior if no workspace folders
+                const files = await vscode.workspace.findFiles('**/*', '**/node_modules/**');
+                this.outputChannel.appendLine(`Found ${files.length} files in workspace`);
+
+                for (const file of files) {
+                    const fileName = path.basename(file.fsPath);
+                    const relativePath = vscode.workspace.asRelativePath(file);
+
+                    // Check file names if needed
+                    if ((this.searchType === 'names' || this.searchType === 'both') && fileName.toLowerCase().includes(lowerQuery)) {
+                        results.push({
+                            uri: file,
+                            fileName,
+                            relativePath
+                        });
+                    }
+
+                    // Check file contents if needed
+                    if (this.searchType === 'contents' || this.searchType === 'both') {
+                        try {
+                            const document = await vscode.workspace.openTextDocument(file);
+                            const text = document.getText();
+                            const lines = text.split('\n');
+
+                            for (let i = 0; i < lines.length; i++) {
+                                const line = lines[i];
+                                const lowerLine = line.toLowerCase();
+                                const index = lowerLine.indexOf(lowerQuery);
+
+                                if (index !== -1) {
+                                    results.push({
+                                        uri: file,
+                                        fileName,
+                                        relativePath,
+                                        lineNumber: i,
+                                        lineText: line.trim(),
+                                        matchIndices: [[index, index + query.length]]
+                                    });
+                                }
+                            }
+                        } catch (error) {
+                            this.outputChannel.appendLine(`Error reading file ${relativePath}: ${error}`);
+                        }
                     }
                 }
             }
         } else {
+            // Search only open documents across all workspace folders
             const openDocuments = vscode.workspace.textDocuments.filter(doc => !doc.isUntitled);
-            this.outputChannel.appendLine(`Searching ${openDocuments.length} open documents`);
+            
+            // Group documents by workspace folder to show window information
+            const documentsByWorkspace = new Map<string, vscode.TextDocument[]>();
+            for (const doc of openDocuments) {
+                const workspaceFolder = vscode.workspace.getWorkspaceFolder(doc.uri);
+                const folderName = workspaceFolder?.name || 'Unknown Workspace';
+                if (!documentsByWorkspace.has(folderName)) {
+                    documentsByWorkspace.set(folderName, []);
+                }
+                documentsByWorkspace.get(folderName)!.push(doc);
+            }
+            
+            const windowCount = documentsByWorkspace.size;
+            this.outputChannel.appendLine(`Searching ${openDocuments.length} open documents across ${windowCount} open window${windowCount !== 1 ? 's' : ''}`);
+            
+            // Log each window and its document count
+            for (const [windowName, docs] of documentsByWorkspace) {
+                this.outputChannel.appendLine(`  - ${windowName}: ${docs.length} document${docs.length !== 1 ? 's' : ''}`);
+            }
 
             for (const document of openDocuments) {
                 const fileName = path.basename(document.uri.fsPath);
                 const relativePath = vscode.workspace.asRelativePath(document.uri);
+                const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
 
                 // Check file names if needed
                 if ((this.searchType === 'names' || this.searchType === 'both') && fileName.toLowerCase().includes(lowerQuery)) {
                     results.push({
                         uri: document.uri,
                         fileName,
-                        relativePath
+                        relativePath,
+                        workspaceFolderName: workspaceFolder?.name
                     });
                 }
 
@@ -192,6 +275,7 @@ export class GlobalSearchProvider {
                                 uri: document.uri,
                                 fileName,
                                 relativePath,
+                                workspaceFolderName: workspaceFolder?.name,
                                 lineNumber: i,
                                 lineText: line.trim(),
                                 matchIndices: [[index, index + query.length]]
@@ -208,22 +292,57 @@ export class GlobalSearchProvider {
     }
 
     private convertToQuickPickItems(results: SearchResult[]): (vscode.QuickPickItem & { result?: SearchResult })[] {
-        return results.map(result => {
-            if (result.lineText !== undefined) {
-                return {
-                    label: `$(file-text) ${result.fileName}`,
-                    description: `Line ${result.lineNumber! + 1}: ${result.lineText}`,
-                    detail: result.relativePath,
-                    result
-                };
-            } else {
-                return {
-                    label: `$(file) ${result.fileName}`,
-                    description: 'File name match',
-                    detail: result.relativePath,
-                    result
-                };
+        const items: (vscode.QuickPickItem & { result?: SearchResult })[] = [];
+        
+        // Group results by workspace folder
+        const groupedResults = new Map<string, SearchResult[]>();
+        
+        for (const result of results) {
+            const folderName = result.workspaceFolderName || 'Unknown Workspace';
+            if (!groupedResults.has(folderName)) {
+                groupedResults.set(folderName, []);
             }
-        });
+            groupedResults.get(folderName)!.push(result);
+        }
+        
+        // Sort workspace folders alphabetically
+        const sortedFolders = Array.from(groupedResults.keys()).sort();
+        
+        for (const folderName of sortedFolders) {
+            const folderResults = groupedResults.get(folderName)!;
+            
+            // Add separator for workspace folder (if we have multiple folders)
+            if (groupedResults.size > 1) {
+                items.push({
+                    label: `$(folder) ${folderName}`,
+                    description: `${folderResults.length} result${folderResults.length !== 1 ? 's' : ''}`,
+                    detail: '',
+                    kind: vscode.QuickPickItemKind.Separator
+                });
+            }
+            
+            // Add results for this workspace folder
+            for (const result of folderResults) {
+                const workspacePrefix = result.workspaceFolderName ? `[${result.workspaceFolderName}] ` : '';
+                
+                if (result.lineText !== undefined) {
+                    items.push({
+                        label: `$(file-text) ${workspacePrefix}${result.fileName}`,
+                        description: `Line ${result.lineNumber! + 1}: ${result.lineText}`,
+                        detail: result.relativePath,
+                        result
+                    });
+                } else {
+                    items.push({
+                        label: `$(file) ${workspacePrefix}${result.fileName}`,
+                        description: 'File name match',
+                        detail: result.relativePath,
+                        result
+                    });
+                }
+            }
+        }
+        
+        return items;
     }
 }
