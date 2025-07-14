@@ -1,0 +1,51 @@
+{
+  "name": "global-search",
+  "displayName": "Global Search",
+  "description": "Search across all open files in all VS Code windows",
+  "version": "0.0.1",
+  "publisher": "itw-creative-works",
+  "icon": "images/icon.png",
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "dist": "vsce package --out dist/"
+  },
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/itw-creative-works/global-search-vscode"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "global-search.openSearch",
+        "title": "Global Search: Search All Open Files"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "global-search.openSearch",
+        "key": "ctrl+shift+g",
+        "mac": "cmd+shift+g",
+        "when": "!terminalFocus"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "@types/node": "16.x",
+    "typescript": "^4.9.4"
+  }
+}
